@@ -1,30 +1,29 @@
 import CalendarIcon from '@skbkontur/react-icons/Calendar';
 import * as React from 'react';
 import { MIN_FULLDATE, MAX_FULLDATE } from '../../lib/date/constants';
+import { ConditionalHandlerCaller } from '../../lib/ConditionalHandlerCaller';
 import { InternalDate } from '../../lib/date/InternalDate';
-import InternalDateGetter from '../../lib/date/InternalDateGetter';
 import InternalDateTransformer from '../../lib/date/InternalDateTransformer';
-import { InternalDateComponent, InternalDateComponentType, InternalDateValidateCheck } from '../../lib/date/types';
+import { InternalDateComponentType } from '../../lib/date/types';
 import MouseDrag from '../../lib/events/MouseDrag';
+import { cx } from '../../lib/theming/Emotion';
+import { ITheme } from '../../lib/theming/Theme';
 import { isFirefox } from '../../lib/utils';
 import { DatePickerLocale, DatePickerLocaleHelper } from '../DatePicker/locale';
-import { isEdge, isIE } from '../ensureOldIEClassName';
 import InputLikeText from '../internal/InputLikeText';
 import { locale } from '../LocaleProvider/decorators';
-import styles from './DateInput.module.less';
+import ThemeConsumer from '../ThemeConsumer';
 import { DateFragmentsView } from './DateFragmentsView';
+import styles from './DateInput.module.less';
+import jsStyles from './DateInput.styles';
 import { Actions, extractAction } from './helpers/DateInputKeyboardActions';
 import { inputNumber } from './helpers/inputNumber';
-import { removeAllSelections, selectNodeContents } from './helpers/SelectionHelpers';
-import { cx } from '../../lib/theming/Emotion';
-import jsStyles from './DateInput.styles';
-import { ITheme } from '../../lib/theming/Theme';
-import ThemeConsumer from '../ThemeConsumer';
-import debounce from 'lodash.debounce';
+import InternalDateMediator from './helpers/InternalDateMediator';
 
 export interface DateInputState {
   selected: InternalDateComponentType | null;
   internalDate: InternalDate;
+  value: string;
   typesOrder: InternalDateComponentType[];
   inputMode: boolean;
   focused: boolean;
@@ -69,8 +68,6 @@ export interface DateInputProps {
   onKeyDown?: (x0: React.KeyboardEvent<HTMLElement>) => void;
 }
 
-const IS_IE = isIE || isEdge;
-
 @locale('DatePicker', DatePickerLocaleHelper)
 export class DateInput extends React.Component<DateInputProps, DateInputState> {
   public static defaultProps = {
@@ -80,18 +77,22 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
     width: 125,
   };
 
+  protected iDateMediator: InternalDateMediator = new InternalDateMediator(
+    (state: Partial<DateInputState>) => this.setState,
+  );
+  protected inputLikeText: InputLikeText | null = null;
+  protected isMouseDown: boolean = false;
+  protected isFirstFocus: boolean = false;
+  protected dragging: boolean = false;
+  protected locale!: DatePickerLocale;
+  protected divInnerNode: HTMLDivElement | null = null;
   private theme!: ITheme;
-  private locale!: DatePickerLocale;
-  private inputLikeText: InputLikeText | null = null;
-  private divInnerNode: HTMLDivElement | null = null;
-  private isMouseDown: boolean = false;
-  private isFirstFocus: boolean = false;
-  private ieFrozen: boolean = false;
 
   constructor(props: DateInputProps) {
     super(props);
 
     this.state = {
+      value: props.value || '',
       notify: false,
       selected: null,
       internalDate: new InternalDate(),
@@ -111,11 +112,7 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
       prevState.internalDate.getOrder() !== this.locale.order ||
       prevState.internalDate.getSeparator() !== this.locale.separator
     ) {
-      this.updateInternalDate(undefined, {}, this.updateInternalDateFromProps);
-    }
-
-    if (this.state.focused && prevState.selected !== this.state.selected) {
-      this.selection();
+      this.updateFromProps();
     }
 
     if (this.state.notify && !prevState.notify) {
@@ -124,12 +121,22 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
   }
 
   public componentDidMount(): void {
-    this.updateInternalDate(undefined, {}, this.updateInternalDateFromProps);
-    if (this.divInnerNode) {
-      MouseDrag.listen(this.divInnerNode);
-      this.divInnerNode.addEventListener('mousedragstart', this.handleMouseDragStart);
-      this.divInnerNode.addEventListener('mousedragend', this.handleMouseDragEnd);
+    this.updateFromProps();
+    if (this.inputLikeText) {
+      const node = isFirefox ? this.inputLikeText.getNode() : this.divInnerNode;
+      if (node) {
+        MouseDrag.listen(node);
+        node.addEventListener('mousedragstart', this.handleMouseDragStart);
+        node.addEventListener('mousedragend', this.handleMouseDragEnd);
+        node.addEventListener('mousedragmove', () => {
+        });
+      }
     }
+    // if (this.divInnerNode) {
+    //   MouseDrag.listen(this.divInnerNode);
+    //   this.divInnerNode.addEventListener('mousedragstart', this.handleMouseDragStart);
+    //   this.divInnerNode.addEventListener('mousedragend', this.handleMouseDragEnd);
+    // }
   }
 
   public render() {
@@ -167,6 +174,67 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
     }
   }
 
+  protected handleMouseDown = (event: React.MouseEvent<HTMLElement>): void => {
+    this.isMouseDown = true;
+  };
+
+  protected updateInternalDate = (state: Partial<DateInputState> = {}): void => {
+    const internalDate = this.iDateMediator.getInternalDate();
+
+    this.setState({ ...state, internalDate } as DateInputState, this.emitChange);
+  };
+
+  protected updateFromProps = (): void => {
+    // 1
+    const internalDate = this.iDateMediator.updateFromProps(this.props, this.locale).getInternalDate();
+    // 2
+    const typesOrder = this.iDateMediator.getTypesOrder();
+
+    this.setState({ typesOrder, internalDate });
+  };
+
+  protected handleBlur = (event: React.FocusEvent<HTMLElement>): void => {
+    event.persist();
+    console.log('DateInput - handleBlur');
+
+    this.setState({ focused: false, selected: null, inputMode: false }, () => {
+      // removeAllSelections();
+      this.iDateMediator.blur().getInternalDate();
+      this.updateInternalDate();
+      if (this.props.onBlur) {
+        this.props.onBlur(event);
+      }
+    });
+  };
+
+  protected handleFocus = (event: React.FocusEvent<HTMLElement>): void => {
+    console.log('focus');
+    if (this.props.disabled) {
+      return;
+    }
+    this.setState(prevState => {
+      this.isFirstFocus = !prevState.focused;
+      return {
+        focused: true,
+        selected:
+          !prevState.dragged && prevState.selected === null ? this.iDateMediator.getLeftmostType() : prevState.selected,
+      };
+    });
+
+    if (this.props.onFocus) {
+      this.props.onFocus(event);
+    }
+  };
+
+  protected notify(): void {
+    this.blink();
+    this.setState({ notify: false });
+  }
+
+  protected selectDateComponent = (selected: InternalDateComponentType | null): void => {
+    this.setState({ selected, inputMode: false });
+  };
+
   private renderMain() {
     const { internalDate, focused, selected, inputMode } = this.state;
     const fragments =
@@ -190,11 +258,12 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
         onBlur={this.handleBlur}
         onFocus={this.handleFocus}
         onKeyDown={this.handleKeyDown}
-        onMouseUp={this.handleMouseUp}
+        onMouseUpCapture={this.handleMouseUp}
         onMouseDown={this.handleMouseDown}
         onPaste={this.handlePaste}
         rightIcon={this.renderIcon}
         onDoubleClickCapture={this.handleDoubleClick}
+        copyValue={this.iDateMediator.getSelected(this.state.selected)}
       >
         <DateFragmentsView
           nodeRef={this.divInnerNodeRef}
@@ -211,22 +280,23 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
     this.divInnerNode = el;
   };
 
-  private handleMouseDown = (event: React.MouseEvent<HTMLElement>) => {
-    this.isMouseDown = true;
-
-    if (IS_IE && this.state.focused && !this.ieFrozen) {
-      event.preventDefault();
-      event.stopPropagation();
+  private handleMouseUp = (): void => {
+    console.log('this.dragging cover', this.dragging);
+    // setTimeout(() => {
+    this.isMouseDown = false;
+    // }, 500);
+    if (!this.state.dragged) {
+      // this.setState({ selected: this.iDateMediator.getLeftmostType() });
     }
   };
 
-  private handleMouseUp = (): void => {
-    this.isMouseDown = false;
-    this.setState({ selected: this.getFirstDateComponentType() });
-  };
-
   private handleSelectDateComponent = (type: InternalDateComponentType, event: React.MouseEvent<HTMLElement>): void => {
-    this.isMouseDown = false;
+    // this.isMouseDown = false;
+    console.log('this.dragging component', this.dragging, this.isMouseDown);
+    if (this.isMouseDown) {
+      return;
+    }
+
     if (this.isFirstFocus && this.state.internalDate && this.state.internalDate.isEmpty()) {
       this.isFirstFocus = false;
       return;
@@ -237,106 +307,22 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
     this.isFirstFocus = false;
   };
 
-  private changeSelectedDateComponent = (type?: InternalDateComponentType | null): void => {
-    type = type || this.state.selected;
-    if (type === null) {
-      return;
-    }
-    if (type === InternalDateComponentType.All) {
-      this.selectNodeContents(this.divInnerNode);
-      return;
-    }
-    const index = this.state.typesOrder.indexOf(type);
-    if (index > -1) {
-      this.selectNodeContents(this.divInnerNode, index * 2, index * 2 + 1);
-    }
+  private handleMouseDragStart = () => {
+    console.log('handleMouseDragStart');
+    this.dragging = true;
+    this.setState({ dragged: true, selected: null });
+    // removeAllSelections();
   };
 
-  private handleMouseDragStart = () => this.setState({ dragged: true, selected: null });
-  private handleMouseDragEnd = () => this.setState({ dragged: false });
-
-  private updateInternalDate = (
-    _internalDate?: InternalDate,
-    state: Partial<DateInputState> = {},
-    callback: (...any: any[]) => void = this.emitChange,
-  ): void => {
-    const internalDate = (_internalDate || this.state.internalDate || new InternalDate()).clone();
-    internalDate.setOrder(this.locale.order).setSeparator(this.locale.separator);
-    const typesOrder = internalDate.toFragments().map(({ type }) => type);
-    this.setState({ ...state, typesOrder, internalDate } as DateInputState, callback);
-  };
-
-  private updateInternalDateFromProps = (): void => {
-    let isMod: boolean = false;
-    const internalDate = this.state.internalDate.clone();
-    const start = internalDate.getRangeStart();
-    const min = start && start.toInternalString();
-    const end = internalDate.getRangeEnd();
-    const max = end && end.toInternalString();
-    const { order, separator } = this.locale;
-    if (this.props.minDate !== min) {
-      isMod = true;
-      internalDate.setRangeStart(new InternalDate({ order, separator, value: this.props.minDate }));
-    }
-    if (this.props.maxDate !== max) {
-      isMod = true;
-      internalDate.setRangeEnd(new InternalDate({ order, separator, value: this.props.maxDate }));
-    }
-    if (!this.props.value || this.props.value !== internalDate.toInternalString()) {
-      isMod = true;
-      internalDate.parseInternalValue(this.props.value);
-    }
-    if (isMod) {
-      this.setState({ internalDate });
-    }
-  };
-
-  private handleFocus = (event: React.FocusEvent<HTMLElement>): void => {
-    if (this.props.disabled) {
-      return;
-    }
-
-    if (IS_IE && this.ieFrozen) {
-      this.ieFrozen = false;
-      event.preventDefault();
-      return;
-    }
-
-    this.setState(prevState => {
-      this.isFirstFocus = !prevState.focused;
-      return {
-        focused: true,
-        selected:
-          prevState.selected === null && !this.isMouseDown ? this.getFirstDateComponentType() : prevState.selected,
-      };
-    });
-
-    if (this.props.onFocus) {
-      this.props.onFocus(event);
-    }
-  };
-
-  private handleBlur = (event: React.FocusEvent<HTMLElement>): void => {
-    if (IS_IE && this.ieFrozen) {
-      event.preventDefault();
-      return;
-    }
-
-    event.persist();
-
-    this.setState({ focused: false, selected: null, inputMode: false }, () => {
-      const { internalDate } = this.state;
-      removeAllSelections();
-      if (internalDate && internalDate.isIncomplete()) {
-        this.updateInternalDate(internalDate.restore());
-      }
-      if (this.props.onBlur) {
-        this.props.onBlur(event);
-      }
-    });
+  private handleMouseDragEnd = () => {
+    console.log('handleMouseDragEnd');
+    this.dragging = false;
+    // this.setState({ dragged: false });
   };
 
   private handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    const { selected } = this.state;
+
     if (this.props.disabled) {
       return;
     }
@@ -348,94 +334,45 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
       }
     }
 
-    const action = extractAction(event);
-
-    if (action === Actions.MoveSelectionLeft) {
-      this.moveSelection(-1);
-    }
-
-    if (action === Actions.MoveSelectionRight) {
-      this.moveSelection(1);
-    }
-
-    if (action === Actions.Separator) {
-      this.pressDelimiter();
-    }
-
-    if (action === Actions.MoveSelectionFirst) {
-      this.selectDateComponent(this.getFirstDateComponentType());
-    }
-
-    if (action === Actions.MoveSelectionLast) {
-      this.selectDateComponent(this.getLastDateComponentType());
-    }
-
-    if (action === Actions.Increment) {
-      this.updateDateComponentBy(1);
-    }
-
-    if (action === Actions.Decrement) {
-      this.updateDateComponentBy(-1);
-    }
-
-    if (action === Actions.Digit) {
-      this.inputValue(event);
-    }
-
-    if (action === Actions.ClearSelection) {
-      this.clearSelected();
-    }
-
-    if (action === Actions.ClearOneChar) {
-      if (this.state.selected === InternalDateComponentType.All) {
-        this.clearSelected();
-      } else {
-        this.clearOneChar();
-      }
-    }
-
-    if (action === Actions.FullSelection) {
-      event.nativeEvent.stopImmediatePropagation();
-      this.selectDateComponent(InternalDateComponentType.All);
-    }
-
-    if (action === Actions.PasteValue) {
-      // @ts-ignore (IE specific api)
-      if (isIE && window.clipboardData) {
-        // @ts-ignore
-        this.handlePaste(undefined, window.clipboardData.getData('text'));
-      }
-    }
-
-    if (action === Actions.WrongInput) {
-      this.blink();
-    }
-
-    if (this.state.focused && action !== Actions.Ignore) {
-      this.selection();
-    }
-
-    if (action !== Actions.Ignore && action !== Actions.PasteValue && action !== Actions.CopyValue) {
-      event.preventDefault();
-    }
+    new ConditionalHandlerCaller<Actions>(extractAction(event))
+      .add(Actions.MoveSelectionLeft, () => this.moveSelection(-1))
+      .add(Actions.MoveSelectionRight, () => this.moveSelection(1))
+      .add(Actions.Separator, this.pressDelimiter)
+      .add(Actions.MoveSelectionFirst, () => this.selectDateComponent(this.iDateMediator.getLeftmostType()))
+      .add(Actions.MoveSelectionLast, () => this.selectDateComponent(this.iDateMediator.getRightmostType()))
+      .add(Actions.Increment, () => this.shiftDateComponent(1))
+      .add(Actions.Decrement, () => this.shiftDateComponent(-1))
+      .add(Actions.Digit, () => this.inputValue(event))
+      .add(Actions.ClearSelection, this.clearSelected)
+      .add(a => a === Actions.ClearOneChar && selected === InternalDateComponentType.All, this.clearSelected)
+      .add(a => a === Actions.ClearOneChar && selected !== InternalDateComponentType.All, this.clearOneChar)
+      .add(Actions.FullSelection, () => this.fullSelection(event))
+      .add(Actions.WrongInput, () => this.blink())
+      // .add(a => a === Actions.CopyValue && !isIE11, this.handleCopyFixIE)
+      // .add(a => a === Actions.PasteValue && (isIE || isEdge), this.handlePasteFixIE)
+      // .add(a => this.state.focused && a !== Actions.Ignore, this.selection)
+      .add(
+        a => a !== Actions.Ignore && a !== Actions.PasteValue && a !== Actions.CopyValue,
+        () => event.preventDefault(),
+      )
+      .check();
   };
 
-  // tslint:disable:member-ordering
-  private selectionNotIe = () => {
-    this.changeSelectedDateComponent(this.state.selected)
+  private fullSelection = (event: React.KeyboardEvent<HTMLElement>) => {
+    event.stopPropagation();
+    event.nativeEvent.stopImmediatePropagation();
+    this.selectDateComponent(InternalDateComponentType.All);
   };
-  private selectionIe = debounce(() => {
-    const node = this.inputLikeText && this.inputLikeText.getNode();
-    if (this.inputLikeText && node && node.contains(document.activeElement)) {
-      this.ieFrozen = true;
-      this.changeSelectedDateComponent(this.state.selected);
-      if (this.inputLikeText) {
-        this.inputLikeText.focus();
-      }
+
+  private handlePaste = (e: React.ClipboardEvent<HTMLElement>): void => {
+    console.log('DateInput - handlePaste');
+    // cross-browser solution
+    const pasted = e && e.clipboardData.getData('text').trim();
+    if (pasted && this.iDateMediator.validateString(pasted)) {
+      this.iDateMediator.paste(pasted).getInternalDate();
+      this.updateInternalDate();
     }
-  }, 10);
-  private selection = IS_IE ? this.selectionIe : this.selectionNotIe;
-  // tslint:enable:member-ordering
+  };
 
   private pressDelimiter = () => {
     const value = this.state.internalDate.get(this.state.selected);
@@ -448,182 +385,110 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
     }
   };
 
-  private handlePaste = (e?: React.ClipboardEvent<HTMLElement>, pasted?: string): void => {
-    pasted = pasted || (e && e.clipboardData.getData('text').trim());
-    if (pasted && this.state.internalDate !== null) {
-      this.updateInternalDate(
-        this.state.internalDate
-          .parseValue(pasted)
-          .restore()
-          .cutOffExcess(),
-      );
-    }
-  };
-
   private emitChange = (): void => {
     const value = this.state.internalDate.isEmpty() ? '' : this.state.internalDate.toInternalString();
     if (this.props.value === value) {
       return;
     }
     if (this.props.onChange) {
+      console.log('.... ->', this.props.value, value);
       this.props.onChange({ target: { value } }, value);
     }
   };
 
-  private clearSelected(): void {
-    const selected = this.state.selected === null ? this.getFirstDateComponentType() : this.state.selected;
-    this.updateInternalDate(this.state.internalDate.clone().set(selected, null), { inputMode: false, selected });
+  private clearSelected = (): void => {
+    const selected = this.state.selected === null ? this.iDateMediator.getLeftmostType() : this.state.selected;
+    this.iDateMediator.clearSelected(selected);
+    this.updateInternalDate({ inputMode: false, selected });
     if (selected === InternalDateComponentType.All) {
-      this.selectDateComponent(this.getFirstDateComponentType());
+      this.selectDateComponent(this.iDateMediator.getLeftmostType());
     }
-  }
+  };
 
-  private clearOneChar(): void {
-    const { selected, internalDate, inputMode } = this.state;
-    const prevType = selected === null ? this.getLastDateComponentType() : selected;
-    const nextType =
-      prevType === InternalDateComponentType.All
-        ? internalDate
-          .toFragments({ withSeparator: false })
-          .reduce((_type, { value, type }) => (value !== null ? type : _type), this.getLastDateComponentType())
-        : prevType;
-    let prev = internalDate.get(nextType);
+  private clearOneChar = (): void => {
+    const { selected, inputMode } = this.state;
+    const nextType = selected === null ? this.iDateMediator.getRightmostType() : selected;
+    let prev = this.iDateMediator.iDate.get(nextType);
     if (prev === null) {
       this.moveSelection(-1);
       return;
     }
     prev = String(inputMode ? prev : InternalDateTransformer.padDateComponent(nextType, prev));
     const next = prev.replace(/.$/, '') || null;
-    this.updateInternalDate(internalDate.clone().set(nextType, next), {
+    this.iDateMediator.iDate.set(nextType, next);
+    this.updateInternalDate({
       inputMode: next !== null,
       selected: nextType,
     });
-  }
+  };
 
-  private updateDateComponentBy(step: number): void {
-    const internalDate = this.state.internalDate.clone();
-    const initial = internalDate.clone();
-    let { selected } = this.state;
-    selected = selected === null ? this.getFirstDateComponentType() : selected;
-    const isValidRange = internalDate.validate({ checks: [InternalDateValidateCheck.Range] });
-    const start = internalDate.getRangeStart();
-    const end = internalDate.getRangeEnd();
-    if (!isValidRange) {
-      if (start && InternalDateGetter.max([internalDate, start]) === start) {
-        internalDate.setComponents(start.getComponentsRaw());
-      } else if (end && InternalDateGetter.min([internalDate, end]) === end) {
-        internalDate.setComponents(end.getComponentsRaw());
-      }
-    } else {
-      const clone = internalDate.clone().shift(selected, step, { isRange: false, isLoop: true });
-      if (clone.validate({ checks: [InternalDateValidateCheck.Range] })) {
-        internalDate.shift(selected, step, { isRange: false, isLoop: true });
-      }
-    }
-    this.updateInternalDate(internalDate, {
+  private shiftDateComponent(step: number): void {
+    const { selected } = this.state;
+    const notice = this.iDateMediator.shiftDateComponent(selected, step);
+    this.updateInternalDate({
       inputMode: false,
-      selected: selected === InternalDateComponentType.All ? this.getFirstDateComponentType() : selected,
-      notify: initial.get(selected) === internalDate.get(selected),
+      selected: selected === InternalDateComponentType.All ? this.iDateMediator.getLeftmostType() : selected,
+      notify: notice,
     });
   }
 
   private moveSelection(step: number, isAutoMoved: boolean = false): void {
-    const { internalDate, typesOrder, selected } = this.state;
-    const index = selected === null ? 0 : typesOrder.indexOf(selected);
-    if (
-      (typesOrder[index] === this.getLastDateComponentType() && step > 0) ||
-      (typesOrder[index] === this.getFirstDateComponentType() && step < 0)
-    ) {
-      return;
-    }
-    let nextIndex = index + step;
-    if (selected === InternalDateComponentType.All) {
-      nextIndex = step < 0 ? 0 : typesOrder.length - 1;
-    }
-    if (selected === InternalDateComponentType.Year && internalDate.getYear() !== null) {
-      internalDate.restore(selected);
-    }
-    this.updateInternalDate(internalDate);
-    if (nextIndex >= 0 && nextIndex < typesOrder.length) {
-      this.setState({
-        selected: typesOrder[nextIndex],
+    const selected = this.iDateMediator.getShiftedType(this.state.selected, step);
+    if (selected !== this.state.selected) {
+      // removeAllSelections();
+      this.updateInternalDate({
+        selected,
         inputMode: false,
         autoMoved: isAutoMoved,
       });
     }
   }
 
-  private notify(): void {
-    this.blink();
-    this.setState({ notify: false });
-  }
-
+  // ???
   private inputValue(event: React.KeyboardEvent<HTMLElement>): void {
     event.persist();
     let { selected: type } = this.state;
-    const internalDate = this.state.internalDate.clone();
+    const internalDate = this.iDateMediator.iDate;
     let prev = internalDate.get(type);
     if (type === null) {
-      type = this.getFirstDateComponentType();
-      prev = null;
+      type = this.iDateMediator.getLeftmostType();
       internalDate.set(type, null);
     }
     if (type === InternalDateComponentType.All) {
-      type = this.getFirstDateComponentType();
-      prev = null;
+      type = this.iDateMediator.getLeftmostType();
+      prev = internalDate.get(type);
       internalDate.set(InternalDateComponentType.All, null);
     }
-    this.setState({ selected: type, internalDate }, () => {
-      inputNumber(type, prev, event.key, this.state.inputMode, this.inputNumberCallBack);
-    });
-  }
-
-  private inputNumberCallBack = (next: InternalDateComponent, inputMode: boolean): void => {
-    let { selected: type } = this.state;
-    const internalDate = this.state.internalDate.clone();
-    if (type === null || type === InternalDateComponentType.All) {
-      type = this.getFirstDateComponentType();
-      inputMode = false;
+    // this.setState({ selected: type, internalDate }, () => {
+    //   console.log('prev', prev);
+    // });
+    // inputNumber(type, prev, event.key, this.state.inputMode, this.inputNumberCallBack);
+    const { value: nextValue, inputMode } = inputNumber(type, prev, event.key, this.state.inputMode);
+    // }
+    //
+    // // ???
+    // private inputNumberCallBack = (type: InternalDateComponentType | null, next: InternalDateComponent, inputMode: boolean): void => {
+    if (type !== InternalDateComponentType.Year) {
+      internalDate.cutOffExcess(type);
+      console.log('2');
+    } else {
+      internalDate.restore(type);
+    }
+    this.moveSelection(1, true);
+    if (!inputMode) {
+    } else {
       this.selectDateComponent(type);
     }
-    internalDate.set(type, next);
-    if (!inputMode) {
-      if (type !== InternalDateComponentType.Year) {
-        internalDate.cutOffExcess(type);
-      } else {
-        internalDate.restore(type);
-      }
-      this.moveSelection(1, true);
-    }
-    this.updateInternalDate(internalDate, { inputMode });
-  };
-
-  private selectNodeContents = (node: HTMLElement | null, start?: number, end?: number): void => {
-    if (this.state.focused && node) {
-      if (isFirefox) {
-        selectNodeContents(node, start, end);
-        setTimeout(() => this.state.focused && selectNodeContents(node, start, end), 0);
-      } else {
-        selectNodeContents(node, start, end);
-      }
-    }
-  };
-
-  private selectDateComponent = (selected: InternalDateComponentType | null): void => {
-    if (IS_IE && this.ieFrozen) {
-      return;
-    }
-    this.setState({ selected, inputMode: false });
-  };
+    // internalDate.cutOffExcess(type);
+    // internalDate.restore(type);
+    //   const internalDate = this.iDateMediator.iDate;
+    internalDate.set(type, nextValue);
+    this.updateInternalDate({ inputMode });
+  }
 
   private handleDoubleClick = (): void => {
     this.selectDateComponent(InternalDateComponentType.All);
   };
-
-  private getFirstDateComponentType = (): InternalDateComponentType => this.state.typesOrder[0];
-
-  private getLastDateComponentType = (): InternalDateComponentType =>
-    this.state.typesOrder[this.state.typesOrder.length - 1];
 
   private renderIcon = () => {
     const { withIcon, size, disabled = false } = this.props;
@@ -641,7 +506,7 @@ export class DateInput extends React.Component<DateInputProps, DateInputState> {
       });
       return (
         <span className={iconStyles}>
-          <CalendarIcon/>
+          <CalendarIcon />
         </span>
       );
     }

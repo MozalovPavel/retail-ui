@@ -6,6 +6,7 @@ import {
   isKeySpace,
   someKeys,
 } from '../../../lib/events/keyboard/identifiers';
+import DropdownContainer from '../../DropdownContainer/DropdownContainer';
 import InternalMenu from '../InternalMenu/InternalMenu';
 import Popup, { PopupPosition } from '../../Popup';
 import RenderLayer from '../../RenderLayer';

@@ -2,8 +2,29 @@
 <DateInput value="27.04.1992" />
 ```
 
-```jsx
-<DateInput value={state.value} onChange={(_, v) => setState({ value: v })} />
+```jsx harmony
+<div>
+  <br/>
+  <DateInput
+    value={state.value}
+    onChange={(_, value) => {
+      setState({ value });
+      console.log('value', value);
+    }}
+  />
+  <br />
+ <input type="text" value="10.10.2010" readOnly/>
+  <br/>
+  <DateInput
+    value={state.value}
+    onChange={(_, value) => {
+      setState({ value });
+      console.log('value', value);
+    }}
+  />
+  <br />
+ <input type="text" value="10.10.2010" readOnly/>
+</div>
 ```
 
 ```jsx

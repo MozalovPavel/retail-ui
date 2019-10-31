@@ -37,7 +37,7 @@ export enum Actions {
   CopyValue,
 }
 
-const extractAction = new KeyboardActionExctracterBuilder()
+const extractAction = new KeyboardActionExctracterBuilder<Actions>()
   .add(Actions.PasteValue, Keyboard.isShortcutPaste)
   .add(Actions.CopyValue, Keyboard.isShortcutCopy)
   .add(Actions.FullSelection, Keyboard.isShortcutSelectAll)

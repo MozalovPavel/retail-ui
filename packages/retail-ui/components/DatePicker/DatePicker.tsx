@@ -295,6 +295,7 @@ class DatePicker extends React.Component<DatePickerProps<DatePickerValue>, DateP
   };
 
   private handleSelect = ({ date, month, year }: CalendarDateShape) => {
+    console.log('handleSelect', { date, month, year });
     const value = InternalDateTransformer.dateToInternalString({ date, month: month + 1, year });
     if (this.props.onChange) {
       this.props.onChange({ target: { value } }, value);
